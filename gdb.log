@@ -1,0 +1,16 @@
+2024-08-26 12:10:24,291 [INFO]: Start listening for commands at port 58253
+2024-08-26 12:10:24,381 [DEBUG]: Got command: 0 get-process-state
+2024-08-26 12:10:24,382 [DEBUG]: Sending response: b'{"request": 0, "response": "stopped"}'
+2024-08-26 12:10:24,382 [DEBUG]: Got command: 1 get-current-frame-location
+2024-08-26 12:10:24,383 [DEBUG]: Sending response: b'{"request": 1, "response": ["/home/rolf/Dropbox/work/rolfworld/programming/projects/neo_note/src/main.c", 622]}'
+2024-08-26 12:10:24,387 [DEBUG]: Got command: 2 info-breakpoints /home/rolf/Dropbox/work/rolfworld/programming/projects/neo_note/src/main.c
+2024-08-26 12:10:24,387 [DEBUG]: Sending response: b'{"request": 2, "response": {"622": [1]}}'
+2024-08-26 12:10:28,901 [DEBUG]: Got command: 3 info-breakpoints /home/rolf/Dropbox/work/rolfworld/programming/projects/neo_note/src/main.c
+2024-08-26 12:10:28,901 [DEBUG]: Sending response: b'{"request": 3, "response": {"622": [1]}}'
+2024-08-26 12:10:34,555 [DEBUG]: Got command: 4 get-process-state
+2024-08-26 12:10:34,555 [DEBUG]: Sending response: b'{"request": 4, "response": "stopped"}'
+2024-08-26 12:10:34,556 [DEBUG]: Got command: 5 get-current-frame-location
+2024-08-26 12:10:34,556 [DEBUG]: Sending response: b'{"request": 5, "response": ["/home/rolf/Dropbox/work/rolfworld/programming/projects/neo_note/src/main.c", 622]}'
+2024-08-26 12:10:34,559 [DEBUG]: Got command: 6 info-breakpoints /home/rolf/Dropbox/work/rolfworld/programming/projects/neo_note/src/main.c
+2024-08-26 12:10:34,559 [DEBUG]: Sending response: b'{"request": 6, "response": {"622": [1]}}'
+2024-08-26 12:10:34,560 [DEBUG]: Got command: 7 handle-command info local
