@@ -8,10 +8,8 @@
 #include <sys/time.h>
 
 #define INIT_SIZE_PAGE 1
-#define GAP_SIZE_PAGE 5
-
 #define INIT_SIZE_LINE 1
-#define GAP_SIZE_LINE 5
+#define GAP_SIZE 5
 
 typedef struct
 {
@@ -53,7 +51,7 @@ typedef enum
   GAP_MINUS_ONE,
   INSIDE_GAP_START,
   INSIDE_GAP_INBETWEEN,
-} IndexPositionInGapArray;
+} PositionInGapArray;
 
 typedef enum
 {
@@ -65,7 +63,7 @@ typedef enum
 // === Utilities
 // =============================================================================
 
-IndexPositionInGapArray
+PositionInGapArray
 get_index_pos_in_gap_array (int index, int gap_start, int gap_end, int buf_size)
 {
   if (index < 0)
@@ -251,11 +249,11 @@ move_cursor_previous_line (Cursor *c, GapBufferPage *gbp)
   return 1;
 }
 
-IndexPositionInGapArray
+PositionInGapArray
 move_cursor (Cursor *c, GapBufferPage *gbp, int new_index)
 {
   GapBufferLine *line = gbp->buffer[c->line];
-  IndexPositionInGapArray state = get_index_pos_in_gap_array (
+  PositionInGapArray state = get_index_pos_in_gap_array (
       new_index,
       line->gap_start,
       line->gap_end,
@@ -372,7 +370,7 @@ expand_gap (GapBuffer *gb, int size, size_t element_size)
   int new_size = gb->buf_size + size - (gb->gap_end - gb->gap_start + 1);
   char *new_buffer = malloc (new_size * element_size);
 
-  // TODO: Only for debugging
+  // NOTE: Only for debugging
   for (int i = 0; i < new_size; i++)
   {
     new_buffer[i] = 'A';
@@ -380,9 +378,6 @@ expand_gap (GapBuffer *gb, int size, size_t element_size)
 
   memcpy (new_buffer, gb->buffer, gb->gap_start * element_size);
   memcpy (
-      // 123_35
-      // gap_size=5
-      // gap_end=3
       new_buffer + (gb->gap_start + size) * element_size,
       &gb->buffer[(gb->gap_end + 1) * element_size],
       (gb->buf_size - gb->gap_end) * element_size);
@@ -392,6 +387,20 @@ expand_gap (GapBuffer *gb, int size, size_t element_size)
 
   gb->gap_end = gb->gap_start + size - 1;
   gb->buf_size = new_size;
+}
+
+void
+insert_in_gap (GapBuffer *gb, char *buffer_ptr, int count, size_t element_size)
+{
+  int gap_size = gb->gap_end - gb->gap_start + 1;
+
+  if (gap_size <= count)
+  {
+    expand_gap (gb, count + GAP_SIZE, element_size);
+  }
+  memcpy (gb->buffer, buffer_ptr, count * element_size);
+
+  gb->gap_start = gb->gap_start + count;
 }
 
 // =============================================================================
@@ -444,48 +453,28 @@ void
 insert_single_char (GapBufferLine *gbl, char value)
 {
   if (gbl->gap_end == gbl->gap_start)
-    expand_gap_line (gbl, GAP_SIZE_LINE);
+    expand_gap_line (gbl, GAP_SIZE);
   gbl->buffer[gbl->gap_start] = value;
   gbl->gap_start++;
 }
 
 void
-delete_single_char (Cursor *c, GapBufferPage *gbp)
+insert_in_gap_line (GapBufferLine *gbl, char *buffer_ptr, int count)
 {
-  GapBufferLine *line = gbp->buffer[c->line];
-  if (c->pos == 0)
+  GapBuffer gb = { gbl->buffer, gbl->gap_start, gbl->gap_end, gbl->buf_size };
+  insert_in_gap (&gb, buffer_ptr, count, sizeof (GapBufferLine *));
+  gbl->buffer = gb.buffer;
+  gbl->buf_size = gb.buf_size;
+  gbl->gap_start = gb.gap_start;
+  gbl->gap_end = gb.gap_end;
+}
+
+void
+delete_single_char (GapBufferLine *gbl)
+{
+  if (gbl->gap_start > 0)
   {
-    // TODO: Concatenate previous line with current line
-    move_cursor_previous_line (c, gbp);
-    // delete_single_char (c, gbp);
-  }
-  else if (c->pos == line->gap_end + 1)
-  {
-    if (line->gap_start == 0)
-    {
-      // TODO: Concatenate previous line with current line
-      move_cursor_previous_line (c, gbp);
-      // delete_single_char (c, gbp);
-    }
-    else
-    {
-      line->gap_start--;
-    }
-  }
-  else if (c->pos == line->gap_end + 2)
-  {
-    line->gap_end++;
-  }
-  else if (c->pos < line->gap_start)
-  {
-    move_gap_line (line, c->pos);
-    line->gap_start--;
-    c->pos = line->gap_end + 1;
-  }
-  else if (c->pos > line->gap_end + 2)
-  {
-    move_gap_line (line, c->pos - 1);
-    line->gap_start--;
+    gbl->gap_start--;
   }
 }
 
@@ -541,7 +530,7 @@ insert_single_line (
     Direction dir)
 {
   if (gbp->gap_end == gbp->gap_start)
-    expand_gap_page (gbp, GAP_SIZE_PAGE);
+    expand_gap_page (gbp, GAP_SIZE);
 
   int index_new_line;
 
@@ -581,6 +570,17 @@ insert_single_line (
 }
 
 void
+insert_in_gap_page (GapBufferPage *gbp, char *buffer_ptr, int count)
+{
+  GapBuffer gb = { gbp->buffer, gbp->gap_start, gbp->gap_end, gbp->buf_size };
+  insert_in_gap (&gb, buffer_ptr, count, sizeof (GapBufferLine *));
+  gbp->buffer = gb.buffer;
+  gbp->buf_size = gb.buf_size;
+  gbp->gap_start = gb.gap_start;
+  gbp->gap_end = gb.gap_end;
+}
+
+void
 delete_single_line (GapBufferPage *gbp)
 {
   if (gbp->gap_start > 0)
@@ -614,14 +614,13 @@ main (void)
   int page_gap_start = 0;
   int line_gap_start = 0;
 
-  GapBufferLine *current_line
-      = init_gap_buffer_line (INIT_SIZE_LINE, GAP_SIZE_LINE);
+  GapBufferLine *current_line = init_gap_buffer_line (INIT_SIZE_LINE, GAP_SIZE);
   for (int i = 0; i < current_line->buf_size; i++)
   {
     current_line->buffer[i] = 'A';
   }
 
-  GapBufferPage *page = init_gap_buffer_page (INIT_SIZE_PAGE, GAP_SIZE_PAGE);
+  GapBufferPage *page = init_gap_buffer_page (INIT_SIZE_PAGE, GAP_SIZE);
   ;
   page->buffer[page->gap_end + 1] = current_line;
 
@@ -659,25 +658,47 @@ main (void)
           move_cursor (cursor, page, current_line->gap_end + 1);
         }
       }
+
       if (key == KEY_UP)
       {
-        // TODO: Check if it is worth to calculate out the gap size
         if (move_cursor_previous_line (cursor, page) == 0)
         {
-          current_line = page->buffer[cursor->line];
           int last_pos = cursor->pos;
-          move_cursor (cursor, page, last_pos);
+          int new_pos = last_pos;
+
+          if (last_pos > current_line->gap_end)
+            new_pos = last_pos
+                      - (current_line->gap_end - current_line->gap_start + 1);
+
+          current_line = page->buffer[cursor->line];
+
+          if (new_pos >= current_line->gap_start)
+            new_pos = new_pos
+                      + (current_line->gap_end - current_line->gap_start + 1);
+
+          move_cursor (cursor, page, new_pos);
         }
       }
 
       if (key == KEY_DOWN)
       {
-        // TODO: Check if it is worth to calculate out the gap size
         if (move_cursor_next_line (cursor, page) == 0)
         {
-          current_line = page->buffer[cursor->line];
           int last_pos = cursor->pos;
-          move_cursor (cursor, page, last_pos);
+          int new_pos = last_pos;
+
+          if (last_pos > current_line->gap_end)
+            new_pos = last_pos
+                      - (current_line->gap_end - current_line->gap_start + 1);
+
+          current_line = page->buffer[cursor->line];
+
+          if (new_pos >= current_line->gap_start)
+            new_pos = new_pos
+                      + (current_line->gap_end - current_line->gap_start + 1);
+
+          move_cursor (cursor, page, new_pos);
+          // NEXT
         }
       }
 
@@ -693,8 +714,7 @@ main (void)
 
       if (key == KEY_LEFT)
       {
-        IndexPositionInGapArray state
-            = move_cursor (cursor, page, cursor->pos - 1);
+        PositionInGapArray state = move_cursor (cursor, page, cursor->pos - 1);
         if (state == OUTSIDE_LEFT || state == INSIDE_GAP_START)
         {
           if (move_cursor_previous_line (cursor, page) == 0)
@@ -711,7 +731,12 @@ main (void)
             && (current_line->gap_start != 0
                 || cursor->pos > current_line->gap_end))
         {
-          delete_single_char (cursor, page);
+          if (cursor->pos != current_line->gap_end + 1)
+          {
+            move_gap_line (current_line, cursor->pos);
+            move_cursor (cursor, page, current_line->gap_end + 1);
+          }
+          delete_single_char (current_line);
         }
         else if (cursor->line != 0)
         {
@@ -722,8 +747,6 @@ main (void)
           // copy current_line to end of privious line
           for (int i = 0; i < current_line->buf_size - 2; i++)
           {
-            // TODO: Make a functon to insert more than one char
-            //       Maybe copy hole memory area?
             if (i < current_line->gap_start || i > current_line->gap_end)
               insert_single_char (previous_line, current_line->buffer[i]);
           }
@@ -731,15 +754,16 @@ main (void)
           move_gap_page (page, cursor->line + 1);
           delete_single_line (page);
           cursor->line--;
+          cursor->pos--;
         }
       }
 
       if (key == KEY_ENTER)
       {
         GapBufferLine *new_line
-            = init_gap_buffer_line (INIT_SIZE_LINE, GAP_SIZE_LINE);
+            = init_gap_buffer_line (INIT_SIZE_LINE, GAP_SIZE);
 
-        // TODO: Only for debug print
+        // NOTE: Only for debug print
         for (int i = 0; i < new_line->buf_size; i++)
         {
           new_line->buffer[i] = 'A';
@@ -757,8 +781,7 @@ main (void)
           cursor->pos = new_line->gap_end + 1;
         }
         // Cursor at end of the line
-        // (this works because the line should always have padding padding on
-        // the end)
+        // (this works because the line should always have padding on the end)
         else if (cursor->pos == current_line->buf_size - 1)
         {
           int index_new_line
