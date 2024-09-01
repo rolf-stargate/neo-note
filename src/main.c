@@ -1,5 +1,4 @@
 // TODO(rolf): Error handle all allocations
-
 #include "raylib.h"
 #include <assert.h>
 #include <stdio.h>
@@ -57,7 +56,13 @@ typedef enum
 {
   BEFORE,
   AFTER,
-} Direction;
+} DIRECTION;
+
+typedef enum
+{
+  GAP_END,
+  GAP_START
+} GAP_POSITION;
 
 // =============================================================================
 // === Utilities
@@ -134,8 +139,8 @@ print_page (GapBufferPage *gbp)
 // =============================================================================
 
 int count = 0;
-int
-renderPageDebug (GapBufferPage *gbp, char *buffer, int size, Cursor c)
+void
+render_page_debug (GapBufferPage *gbp, char *buffer, int size, Cursor c)
 {
   int pos = 0;
   buffer[pos] = '[';
@@ -201,8 +206,6 @@ renderPageDebug (GapBufferPage *gbp, char *buffer, int size, Cursor c)
   buffer[pos] = '\n';
   pos++;
   buffer[pos] = '\0';
-
-  return 1;
 }
 
 // =============================================================================
@@ -224,8 +227,15 @@ move_cursor_next_line (Cursor *c, GapBufferPage *gbp)
 {
   if (c->line < gbp->buf_size - 1)
   {
-    GapBufferLine *next_line = gbp->buffer[c->line + 1];
-    if (next_line != NULL)
+    if (c->line + 1 == gbp->gap_start)
+    {
+      if (gbp->gap_end != gbp->buf_size - 1)
+      {
+        c->line = gbp->gap_end + 1;
+        return 0;
+      }
+    }
+    else
     {
       c->line++;
       return 0;
@@ -239,8 +249,15 @@ move_cursor_previous_line (Cursor *c, GapBufferPage *gbp)
 {
   if (c->line > 0)
   {
-    GapBufferLine *next_line = gbp->buffer[c->line - 1];
-    if (next_line != NULL)
+    if (c->line - 1 == gbp->gap_end)
+    {
+      if (gbp->gap_start != 0)
+      {
+        c->line = gbp->gap_start - 1;
+        return 0;
+      }
+    }
+    else
     {
       c->line--;
       return 0;
@@ -306,6 +323,115 @@ move_cursor (Cursor *c, GapBufferPage *gbp, int new_index)
 // =============================================================================
 // === Gap Buffer
 // =============================================================================
+void
+move_gap_start (GapBuffer *gb, int index, size_t element_size)
+{
+  int dest;
+  int src;
+  int size;
+  int gap_size = gb->gap_end - gb->gap_start + 1;
+
+  assert (index < gb->buf_size);
+  if (index < 0)
+    index = 0;
+
+  // Index before gap
+  if (index < gb->gap_start)
+  {
+    dest = index + gap_size;
+    src = index;
+    size = gb->gap_start - index;
+  }
+  // index after gap
+  else if (index > gb->gap_end)
+  {
+    // Not enough space for gap after index
+    if (gb->buf_size - gap_size < index)
+    {
+      index = gb->buf_size - gap_size;
+    }
+    dest = gb->gap_start;
+    src = gb->gap_end + 1;
+    size = index - gb->gap_start + 1;
+  }
+  // index inside gap
+  else
+  {
+    // Not enough space for gap after index
+    if (gb->buf_size - gap_size < index)
+    {
+      index = gb->buf_size - gap_size;
+    }
+    dest = gb->gap_start;
+    src = gb->gap_end + 1;
+    size = index - gb->gap_start;
+  }
+
+  memmove (
+      (char *)gb->buffer + dest * element_size,
+      (char *)gb->buffer + src * element_size,
+      size * element_size);
+
+  gb->gap_start = index;
+  gb->gap_end = index + (gap_size - 1);
+}
+
+void
+move_gap_end (GapBuffer *gb, int index, size_t element_size)
+{
+  int dest;
+  int src;
+  int size;
+  int gap_size = gb->gap_end - gb->gap_start + 1;
+
+  assert (index < gb->buf_size);
+  if (index < 0)
+    index = 0;
+
+  // Index before gap
+  if (index < gb->gap_start)
+  {
+
+    // Not enough space for gap before index
+    if (gb->buf_size - gap_size < index)
+      if (index < gap_size - 1)
+      {
+        index = gap_size - 1;
+      }
+
+    dest = index + 1;
+    src = index - (gap_size - 1);
+    size = gb->gap_start - src;
+  }
+  // index after gap
+  else if (index > gb->gap_end)
+  {
+    dest = gb->gap_start;
+    src = gb->gap_end + 1;
+    size = index - gb->gap_end;
+  }
+  // index inside gap
+  else
+  {
+    // Not enough space for gap before index
+    if (index < gap_size - 1)
+    {
+      index = gap_size - 1;
+    }
+
+    dest = index + 1;
+    src = index - (gap_size - 1);
+    size = gb->gap_start - src;
+  }
+
+  memmove (
+      (char *)gb->buffer + dest * element_size,
+      (char *)gb->buffer + src * element_size,
+      size * element_size);
+
+  gb->gap_end = index;
+  gb->gap_start = index - (gap_size - 1);
+}
 
 void
 move_gap (GapBuffer *gb, int index, size_t element_size)
@@ -320,6 +446,7 @@ move_gap (GapBuffer *gb, int index, size_t element_size)
   if (index < 0)
     index = 0;
 
+  // if goal is after gap
   if (index > gb->gap_end)
   {
     dest = gb->gap_start;
@@ -429,10 +556,20 @@ init_gap_buffer_line (int initial_size, int gap_size)
 }
 
 void
-move_gap_line (GapBufferLine *gbl, int index)
+move_gap_line (GapBufferLine *gbl, int index, GAP_POSITION gap_pos)
 {
   GapBuffer gb = { gbl->buffer, gbl->gap_start, gbl->gap_end, gbl->buf_size };
-  move_gap (&gb, index, sizeof (char));
+
+  switch (gap_pos)
+  {
+  case GAP_START:
+    move_gap_start (&gb, index, sizeof (char));
+    break;
+  case GAP_END:
+    move_gap_end (&gb, index, sizeof (char));
+    break;
+  }
+
   gbl->gap_start = gb.gap_start;
   gbl->gap_end = gb.gap_end;
 }
@@ -450,12 +587,21 @@ expand_gap_line (GapBufferLine *gbl, int new_gap_size)
 }
 
 void
-insert_single_char (GapBufferLine *gbl, char value)
+insert_single_char (GapBufferLine *gbl, char value, GAP_POSITION gap_pos)
 {
   if (gbl->gap_end == gbl->gap_start)
     expand_gap_line (gbl, GAP_SIZE);
-  gbl->buffer[gbl->gap_start] = value;
-  gbl->gap_start++;
+  switch (gap_pos)
+  {
+  case GAP_START:
+    gbl->buffer[gbl->gap_start] = value;
+    gbl->gap_start++;
+    break;
+  case GAP_END:
+    gbl->buffer[gbl->gap_end] = value;
+    gbl->gap_end--;
+    break;
+  }
 }
 
 void
@@ -470,11 +616,21 @@ insert_in_gap_line (GapBufferLine *gbl, char *buffer_ptr, int count)
 }
 
 void
-delete_single_char (GapBufferLine *gbl)
+delete_single_char (GapBufferLine *gbl, GAP_POSITION gap_pos)
 {
-  if (gbl->gap_start > 0)
+  switch (gap_pos)
   {
-    gbl->gap_start--;
+  case GAP_START:
+    if (gbl->gap_start > 0)
+    {
+      gbl->gap_start--;
+    }
+    break;
+  case GAP_END:
+    if (gbl->gap_end < gbl->buf_size - 1)
+    {
+      gbl->gap_end++;
+    }
   }
 }
 
@@ -500,13 +656,23 @@ init_gap_buffer_page (int initial_size, int gap_size)
 }
 
 void
-move_gap_page (GapBufferPage *gbp, int index)
+move_gap_page (GapBufferPage *gbp, int index, GAP_POSITION gap_pos)
 {
   assert (index >= 0);
   assert (index < gbp->buf_size);
 
   GapBuffer gb = { gbp->buffer, gbp->gap_start, gbp->gap_end, gbp->buf_size };
-  move_gap (&gb, index, sizeof (GapBufferLine *));
+
+  switch (gap_pos)
+  {
+  case GAP_START:
+    move_gap_start (&gb, index, sizeof (GapBufferLine *));
+    break;
+  case GAP_END:
+    move_gap_end (&gb, index, sizeof (GapBufferLine *));
+    break;
+  }
+
   gbp->gap_start = gb.gap_start;
   gbp->gap_end = gb.gap_end;
 }
@@ -527,7 +693,7 @@ insert_single_line (
     GapBufferPage *gbp,
     GapBufferLine *new_line,
     int line_index,
-    Direction dir)
+    DIRECTION dir)
 {
   if (gbp->gap_end == gbp->gap_start)
     expand_gap_page (gbp, GAP_SIZE);
@@ -541,7 +707,7 @@ insert_single_line (
   {
     if (line_index != gbp->gap_end + 1)
     {
-      move_gap_page (gbp, line_index);
+      move_gap_page (gbp, line_index, GAP_END);
     }
     index_new_line = gbp->gap_start;
     gbp->buffer[gbp->gap_start] = new_line;
@@ -551,16 +717,10 @@ insert_single_line (
   {
     if (line_index != gbp->gap_start - 1)
     {
-      if (line_index == gbp->buf_size - 1)
-      {
-        move_gap_page (
-            gbp,
-            gbp->buf_size - 1 - (gbp->gap_end - gbp->gap_start));
-      }
-      else
-      {
-        move_gap_page (gbp, gbp->gap_start);
-      }
+      move_gap_page (
+          gbp,
+          gbp->buf_size - 1 - (gbp->gap_end - gbp->gap_start),
+          GAP_START);
     }
     index_new_line = gbp->gap_start;
     gbp->buffer[gbp->gap_start] = new_line;
@@ -591,6 +751,87 @@ delete_single_line (GapBufferPage *gbp)
 ;
 
 // =============================================================================
+// === Render Functions
+// =============================================================================
+/*
+   [ lkjlkj___ljlkj ]
+*/
+int
+render_string_from_page (GapBufferPage *gbp, char *buffer, int size)
+{
+  int line_count = 0;
+  int pos = 0;
+  for (int line = 0; line < gbp->buf_size; line++)
+  {
+    if (line < gbp->gap_start || line > gbp->gap_end)
+    {
+      for (int ch = 0; ch < gbp->buffer[line]->buf_size; ch++)
+      {
+        GapBufferLine *l = gbp->buffer[line];
+        if (ch != l->buf_size - 1)
+        {
+          if (ch < l->gap_start || ch > l->gap_end)
+          {
+            buffer[pos] = l->buffer[ch];
+            pos++;
+          }
+        }
+        else
+        {
+          buffer[pos] = '\n';
+          pos++;
+          line_count++;
+        }
+      }
+    }
+  }
+  buffer[pos] = '\0';
+  return line_count;
+}
+
+typedef struct
+{
+  Vector2 page_pos;
+  float width;
+  float height;
+} CursorProps;
+
+CursorProps
+render_cursor_pos_from_page (Cursor c, GapBufferPage page, Font font)
+{
+  Vector2 pos = { 0 };
+  if (c.line < page.gap_start)
+  {
+    pos.y = c.line * (font.baseSize + 3);
+  }
+  else
+  {
+    pos.y
+        = (c.line - (page.gap_end - page.gap_start + 1)) * (font.baseSize + 3);
+  }
+  int last_size = 0;
+  for (int ch = 0; ch <= c.pos; ch++)
+  {
+    if ((ch < page.buffer[c.line]->gap_start
+         || ch > page.buffer[c.line]->gap_end))
+    {
+      int glyph = page.buffer[c.line]->buffer[ch];
+      int glyph_index = glyph - 32;
+      pos.x += last_size;
+      last_size = font.glyphs[glyph_index].advanceX + 2;
+    }
+  }
+
+  CursorProps result;
+
+  result.page_pos = pos;
+  result.width = (float)last_size;
+  result.height = (float)font.baseSize;
+
+  return result;
+}
+
+// =============================================================================
 // === main
 // =============================================================================
 
@@ -601,13 +842,18 @@ main (void)
   // === Initialization
   // ========================================================
 
-  // Raylib
+  // Raylib -- init
   const int screen_width = 400;
   const int screen_height = 400;
 
   InitWindow (screen_width, screen_height, "NeoNote");
 
   SetTargetFPS (60);
+
+  // Raylib -- fonts
+  // TODO: Add multiple fonts and find out how to handle dynamic line spacing
+  Font font_ttf = LoadFontEx ("fonts/jpos_sans_serif_regular.ttf", 13, 0, 94);
+  SetTextLineSpacing (16);
 
   // Page Buffer
 
@@ -621,7 +867,7 @@ main (void)
   }
 
   GapBufferPage *page = init_gap_buffer_page (INIT_SIZE_PAGE, GAP_SIZE);
-  ;
+
   page->buffer[page->gap_end + 1] = current_line;
 
   // Init Cursor
@@ -631,34 +877,56 @@ main (void)
 
   // Debug
   char debugTextBuffer[8192] = { 0 };
+  char textBuffer[1024] = { 0 };
+  double last_time = GetTime ();
+  double curr_time;
 
   // === Main Loop
   // ===========================================================================
   while (!WindowShouldClose ())
   {
+    curr_time = GetTime ();
     // Upadate
-    int key = GetKeyPressed ();
     current_line = page->buffer[cursor->line];
+    int _char = GetCharPressed ();
+    int key = GetKeyPressed ();
 
-    while (key > 0)
+    while (_char > 0)
     {
-      if ((key >= 32) && (key <= 125))
+      if ((_char >= 32) && (_char <= 125))
       {
         if (cursor->pos == current_line->gap_end + 1)
         {
-          insert_single_char (current_line, key);
+          /* NOTE: Do this because gap could be expanded, messing up the cursor
+             position. Maybe handle this automaticly inside insert_single_char?
+          */
+          insert_single_char (current_line, _char, GAP_START);
+          cursor->pos = current_line->gap_end + 1;
+        }
+        else if (cursor->pos < current_line->gap_start)
+        {
+          move_gap_line (current_line, cursor->pos, GAP_START);
+          insert_single_char (current_line, _char, GAP_START);
+          /* NOTE: Do this because gap could be expanded, messing up the cursor
+             position. Maybe handle this automaticly inside insert_single_char?
+          */
           cursor->pos = current_line->gap_end + 1;
         }
         else
         {
-          move_gap_line (current_line, cursor->pos);
-          insert_single_char (current_line, key);
-
-          assert (current_line->gap_end + 1 < current_line->buf_size);
-          move_cursor (cursor, page, current_line->gap_end + 1);
+          move_gap_line (current_line, cursor->pos - 1, GAP_END);
+          insert_single_char (current_line, _char, GAP_START);
+          /* NOTE: Do this because gap could be expanded, messing up the cursor
+             position. Maybe handle this automaticly inside insert_single_char?
+          */
+          cursor->pos = current_line->gap_end + 1;
         }
       }
 
+      _char = GetCharPressed ();
+    }
+    while (key > 0)
+    {
       if (key == KEY_UP)
       {
         if (move_cursor_previous_line (cursor, page) == 0)
@@ -703,6 +971,7 @@ main (void)
       }
 
       if (key == KEY_RIGHT)
+      {
         if (move_cursor (cursor, page, cursor->pos + 1) == OUTSIDE_RIGHT)
         {
           if (move_cursor_next_line (cursor, page) == 0)
@@ -711,6 +980,7 @@ main (void)
             move_cursor (cursor, page, 0);
           }
         }
+      }
 
       if (key == KEY_LEFT)
       {
@@ -731,15 +1001,26 @@ main (void)
             && (current_line->gap_start != 0
                 || cursor->pos > current_line->gap_end))
         {
-          if (cursor->pos != current_line->gap_end + 1)
+          if (cursor->pos == current_line->gap_end + 1)
           {
-            move_gap_line (current_line, cursor->pos);
+            delete_single_char (current_line, GAP_START);
+          }
+          else if (cursor->pos < current_line->gap_start)
+          {
+            move_gap_line (current_line, cursor->pos - 1, GAP_START);
+            delete_single_char (current_line, GAP_END);
             move_cursor (cursor, page, current_line->gap_end + 1);
           }
-          delete_single_char (current_line);
+          else if (cursor->pos > current_line->gap_end)
+          {
+            move_gap_line (current_line, cursor->pos - 1, GAP_END);
+            delete_single_char (current_line, GAP_START);
+            move_cursor (cursor, page, current_line->gap_end + 1);
+          }
         }
         else if (cursor->line != 0)
         {
+          // NOTE: CONTINUE FROM HERE
           GapBufferLine *previous_line = page->buffer[cursor->line - 1];
           // move cursor->pos to the end of the previous line
           cursor->pos = previous_line->buf_size - 1;
@@ -748,10 +1029,13 @@ main (void)
           for (int i = 0; i < current_line->buf_size - 2; i++)
           {
             if (i < current_line->gap_start || i > current_line->gap_end)
-              insert_single_char (previous_line, current_line->buffer[i]);
+              insert_single_char (
+                  previous_line,
+                  current_line->buffer[i],
+                  GAP_START);
           }
           // delete current_line
-          move_gap_page (page, cursor->line + 1);
+          move_gap_page (page, cursor->line + 1, GAP_START);
           delete_single_line (page);
           cursor->line--;
           cursor->pos--;
@@ -770,10 +1054,7 @@ main (void)
         }
 
         // Cursor on start of the line
-        // or Cursor one after gap that starts at index 0
-        if (cursor->pos == 0
-            || (cursor->pos == current_line->gap_end + 1
-                && current_line->gap_start == 0))
+        if (cursor->pos == 0)
         {
           int index_new_line
               = insert_single_line (page, new_line, cursor->line, BEFORE);
@@ -789,24 +1070,27 @@ main (void)
           cursor->line = index_new_line;
           cursor->pos = new_line->gap_end + 1;
         }
+        // Cursor in the middle of the line
         else
         {
-          move_gap_line (new_line, 0);
+          move_gap_line (new_line, 0, GAP_START);
           for (int i = cursor->pos; i < current_line->buf_size - 2; i++)
           {
             // TODO: Make a functon to insert more than one char
             //       Maybe copy hole memory area?
             if (i < current_line->gap_start || i > current_line->gap_end)
-              insert_single_char (new_line, current_line->buffer[i]);
+              insert_single_char (new_line, current_line->buffer[i], GAP_START);
           }
           current_line->gap_start = cursor->pos;
           current_line->gap_end = current_line->buf_size - 2;
 
+          move_gap_page (page, cursor->line + 1, GAP_START);
           int index_new_line
-              = insert_single_line (page, new_line, cursor->line, AFTER);
+              = insert_single_line (page, new_line, page->gap_start, AFTER);
           cursor->line = index_new_line;
           cursor->pos = 0;
         }
+        current_line = page->buffer[cursor->line];
       }
 
       key = GetKeyPressed ();
@@ -817,44 +1101,81 @@ main (void)
 
     ClearBackground (RAYWHITE);
 
-    renderPageDebug (page, debugTextBuffer, 8192, *cursor);
-    DrawText (debugTextBuffer, 10, 90, 10, DARKGRAY);
-    DrawText (TextFormat ("pos: %d", cursor->pos), 10, 10, 10, DARKGRAY);
-    DrawText (TextFormat ("line: %d", cursor->line), 10, 20, 10, DARKGRAY);
+    int line_count = render_string_from_page (page, textBuffer, 1024);
+    CursorProps cursor_pos
+        = render_cursor_pos_from_page (*cursor, *page, font_ttf);
+    // TODO: Check if I can simply add two Vector2's
+    Vector2 padding = { 20.0f, 20.0f };
+    cursor_pos.page_pos.x = cursor_pos.page_pos.x + padding.x;
+    cursor_pos.page_pos.y = cursor_pos.page_pos.y + padding.y;
+
+    DrawTextEx (
+        font_ttf,
+        textBuffer,
+        padding,
+        (float)font_ttf.baseSize,
+        2,
+        MAROON);
+
+    if (curr_time - last_time > 0.5f)
+    {
+      DrawRectangleV (
+          cursor_pos.page_pos,
+          (Vector2){ cursor_pos.width, cursor_pos.height },
+          GREEN);
+      if (curr_time - last_time > 1.0f)
+        last_time = curr_time;
+    }
+
+    render_page_debug (page, debugTextBuffer, 8192, *cursor);
+    int debug_offset = line_count * font_ttf.baseSize + 20;
+    DrawText (debugTextBuffer, 10, debug_offset + 90, 10, DARKGRAY);
+    DrawText (
+        TextFormat ("pos: %d", cursor->pos),
+        10,
+        debug_offset + 10,
+        10,
+        DARKGRAY);
+    DrawText (
+        TextFormat ("line: %d", cursor->line),
+        10,
+        debug_offset + 20,
+        10,
+        DARKGRAY);
     DrawText (
         TextFormat ("page->gap_start: %d", page->gap_start),
         10,
-        30,
+        debug_offset + 30,
         10,
         DARKGRAY);
     DrawText (
         TextFormat ("page->gap_end: %d", page->gap_end),
         10,
-        40,
+        debug_offset + 40,
         10,
         DARKGRAY);
     DrawText (
         TextFormat ("page->buf_size: %d", current_line->buf_size),
         10,
-        50,
+        debug_offset + 50,
         10,
         DARKGRAY);
     DrawText (
         TextFormat ("current_line->gap_start: %d", current_line->gap_start),
         10,
-        60,
+        debug_offset + 60,
         10,
         DARKGRAY);
     DrawText (
         TextFormat ("current_line->gap_end: %d", current_line->gap_end),
         10,
-        70,
+        debug_offset + 70,
         10,
         DARKGRAY);
     DrawText (
         TextFormat ("current_line->buf_size: %d", current_line->buf_size),
         10,
-        80,
+        debug_offset + 80,
         10,
         DARKGRAY);
 
