@@ -1,4 +1,37 @@
 # NeoNote || project:neo_note
+## Rules
+### Cursor
+- Should the Curser position depend on chars or index?
+### Insert
+```
+0123456789
+### CURSOR BEFOR GAP ###
+INSERT BEFORE CURSOR
+abc___defg GAP_START ADD CURSOR
+ |         CURSOR MOVES TO GAP_END + 1
+aX__bcdefg INSERT AT GAP_START
+    |
+
+INSERT AFTER CURSOR
+abc___defg GAP_START ADD CURSOR + 1
+ |         CURSOR STAYS
+ab__Xcdefg INSERT AT GAP_END
+ |
+
+### CURSOR AFTER GAP ###
+INSERT BEFORE CURSOR
+abc___defg  GAP_END ADD CURSOR - 1
+        |   CURSOR STAYS
+abcdeX__fg  INSERT AT GAP_START
+        |
+
+INSERT AFTER CURSOR
+abc___defg GAP_END ADD CURSOR
+        |  CURSOR MOVES TO GAP_START + 1
+abcdef__Xg INSERT AT GAP END
+     |
+```
+
 ## Notes
 ### Font
 #### Raylib Font Structs

@@ -434,60 +434,6 @@ move_gap_end (GapBuffer *gb, int index, size_t element_size)
 }
 
 void
-move_gap (GapBuffer *gb, int index, size_t element_size)
-{
-  int dest;
-  int src;
-  int size;
-  int gap_size = gb->gap_end - gb->gap_start + 1;
-
-  assert (index < gb->buf_size);
-
-  if (index < 0)
-    index = 0;
-
-  // if goal is after gap
-  if (index > gb->gap_end)
-  {
-    dest = gb->gap_start;
-    src = gb->gap_end + 1;
-    size = index - gb->gap_end - 1;
-
-    memmove (
-        (char *)gb->buffer + dest * element_size,
-        (char *)gb->buffer + src * element_size,
-        size * element_size);
-
-    gb->gap_end = index - 1;
-    gb->gap_start = gb->gap_end - (gap_size - 1);
-  }
-  else if (index < gb->gap_end)
-  {
-    if (index > gb->gap_start)
-    {
-      dest = gb->gap_start;
-      src = gb->gap_end + 1;
-
-      size = index - gb->gap_start;
-    }
-    else
-    {
-      dest = index + gap_size;
-      src = index;
-
-      size = gb->gap_start - index;
-    }
-    memmove (
-        (char *)gb->buffer + dest * element_size,
-        (char *)gb->buffer + src * element_size,
-        size * element_size);
-
-    gb->gap_start = index;
-    gb->gap_end = index + (gap_size - 1);
-  }
-}
-
-void
 expand_gap (GapBuffer *gb, int size, size_t element_size)
 {
   // The gab is a resource we never want to shrink it
@@ -999,7 +945,7 @@ main (void)
       {
         if (cursor->pos != 0
             && (current_line->gap_start != 0
-                || cursor->pos > current_line->gap_end))
+                || cursor->pos != current_line->gap_end + 1))
         {
           if (cursor->pos == current_line->gap_end + 1)
           {
@@ -1020,25 +966,36 @@ main (void)
         }
         else if (cursor->line != 0)
         {
-          // NOTE: CONTINUE FROM HERE
           GapBufferLine *previous_line = page->buffer[cursor->line - 1];
-          // move cursor->pos to the end of the previous line
-          cursor->pos = previous_line->buf_size - 1;
 
-          // copy current_line to end of privious line
-          for (int i = 0; i < current_line->buf_size - 2; i++)
+          if (current_line->gap_start == 0
+              && current_line->gap_end == current_line->buf_size - 2)
           {
-            if (i < current_line->gap_start || i > current_line->gap_end)
-              insert_single_char (
-                  previous_line,
-                  current_line->buffer[i],
-                  GAP_START);
+            // delete current_line
+            cursor->pos = previous_line->buf_size - 1;
+            move_gap_page (page, cursor->line + 1, GAP_START);
+            delete_single_line (page);
+            cursor->line--;
           }
-          // delete current_line
-          move_gap_page (page, cursor->line + 1, GAP_START);
-          delete_single_line (page);
-          cursor->line--;
-          cursor->pos--;
+          else
+          {
+            move_gap_line (previous_line, previous_line->buf_size - 2, GAP_END);
+            cursor->pos = previous_line->gap_start;
+
+            // copy current_line to end of privious line
+            for (int i = 0; i < current_line->buf_size - 1; i++)
+            {
+              if (i < current_line->gap_start || i > current_line->gap_end)
+                insert_single_char (
+                    previous_line,
+                    current_line->buffer[i],
+                    GAP_START);
+            }
+            // delete current_line
+            move_gap_page (page, cursor->line + 1, GAP_START);
+            delete_single_line (page);
+            cursor->line--;
+          }
         }
       }
 
